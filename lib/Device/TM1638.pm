@@ -162,13 +162,13 @@ sub enable {
     _gpio_fsel($self->{clk}, &Device::BCM2835::BCM2835_GPIO_FSEL_OUTP);
     _gpio_fsel($self->{stb}, &Device::BCM2835::BCM2835_GPIO_FSEL_OUTP);
 
-    _write($self->{stb}, 1);
+    $self->stb_high;
     _write($self->{clk}, 1);
 
     $self->send_command(0x40);
     $self->send_command(0x80 | 8 | min(7, $intensity));
 
-    _write($self->{stb}, 0);
+    $self->stb_low;
 
     $self->send_byte(0xc0);
 
@@ -176,9 +176,78 @@ sub enable {
         $self->send_byte(0x00);
     }
 
-    _write($self->{stb}, 1);
+    $self->stb_high;
 
 };
+
+sub send_command {
+    my ($self, $cmd) = @_;
+    $self->stb_low;
+    $self->send_byte($cmd);
+    $self->stb_high;
+}
+
+sub send_data {
+    my ($self, $addr, $data) = @_;
+    $self->send_command(0x44);
+    $self->stb_low;
+    $self->send_byte(0xC0 | $addr);
+    $self->send_byte($data);
+    $self->stb_high;
+}
+
+sub send_byte {
+    my ($self, $data) = @_;
+    for (1..8) {
+        _write($self->{clk}, 0);
+        _write($self->{dio}, $data & 1);
+        $data >>= 1;
+        _write($self->{clk}, 1);
+    };
+}
+
+sub set_led {
+    my ($self, $n, $color) = @_;
+    $self->send_data(($n << 1) + 1, $color);
+}
+
+sub send_char {
+    my ($self, $pos, $data, $dot) = @_;
+    $dot ||= 0;
+    $self->send_data($pos << 1, $data | ($dot ? 128 : 0);
+}
+
+sub set_digit {
+    my ($self, $pos, $digit, $dot) = @_;
+    $dot ||= 0;
+    for my $i (0..6) {
+        $self->send_char($i, $self->get_bit_mask($pos, $digit, $i), $dot);
+    }
+}
+
+sub get_bit_mask {
+    my ($self, $pos, $digit, $bit) = @_;
+    return (($FONT{$digit} >> $bit) & 1) << $pos;
+}
+
+
+
+
+
+
+
+
+
+sub stb_low {
+    my($self) = @_;
+    _write($self->{stb}, 0);
+}
+
+sub stb_high {
+    my($self) = @_;
+    _write($self->{stb}, 1);
+}
+
 
 
 
