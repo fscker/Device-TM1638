@@ -41,7 +41,7 @@ if you don't export anything, such as for a purely object-oriented module.
 =head2 function1
 
 =cut
-my %font = (
+my %FONT = (
         '!' => 0b10000110,
         '"' => 0b00100010,
         '#' => 0b01111110,
@@ -150,6 +150,11 @@ sub _write {
     Device::BCM2835::gpio_write($pin, $value);
 }
 
+sub _read {
+    my ($pin) = @_;
+    return Device::BCM2835::gpio_lev($pin);
+}
+
 sub _gpio_fsel {
     my ($pin, $value) = @_;
     Device::BCM2835::gpio_fsel($pin, $value);
@@ -211,17 +216,22 @@ sub set_led {
     $self->send_data(($n << 1) + 1, $color);
 }
 
-sub send_char {
+sub _send_char {
     my ($self, $pos, $data, $dot) = @_;
     $dot ||= 0;
-    $self->send_data($pos << 1, $data | ($dot ? 128 : 0);
+    $self->send_data($pos << 1, $data | ($dot ? 128 : 0));
+}
+
+sub send_char {
+    my ($self, $pos, $char, $dot) = @_;
+    $self->_send_char($pos, $FONT{$char}, $dot);
 }
 
 sub set_digit {
     my ($self, $pos, $digit, $dot) = @_;
     $dot ||= 0;
     for my $i (0..6) {
-        $self->send_char($i, $self->get_bit_mask($pos, $digit, $i), $dot);
+        $self->_send_char($i, $self->get_bit_mask($pos, $digit, $i), $dot);
     }
 }
 
@@ -230,13 +240,80 @@ sub get_bit_mask {
     return (($FONT{$digit} >> $bit) & 1) << $pos;
 }
 
+sub set_text {
+    my ($self, $text) = @_;
+    
+    my $dots = 0b00000000;
+    my $pos = index($text,'.');
+    if ($pos != -1) {
+        $dots = $dots | (128 >> $pos+(8-length($text)));
+        $text =~ s/\.//g;
+    }
 
+    $self->_send_char(7, $self->rotate_bits($dots));
+    $text = substr($text, 0,8);
+    $text = reverse($text);
+    $text .= " " x (8-length($text));
 
+    for my $i (0..7) {
+        my $byte = 0b00000000;
+        for my $pos (0..7) {
+            my $c = substr($text, $pos, 1);
+            if ($c ne ' ') {
+                $byte = ($byte | $self->get_bit_mask($pos, $c, $i));
+            }
+            $self->_send_char($i, $self->rotate_bits($byte));
+        }
+    }
+}
 
+sub receive {
+    my ($self) = @_;
+    my $temp = 0;
+    _gpio_fsel($self->{dio}, &Device::BCM2835::BCM2835_GPIO_FSEL_INPT);
+    Device::BCM2835::gpio_set_pud($self->{dio}, &Device::BCM2835::BCM2835_GPIO_PUD_UP);
+    for my $i (0..7) {
+        $temp >>= 1;
+        _write($self->{clk}, 0);
+        if ($self->_read($self->{clk})) {
+            $temp |= 0x80;
+        }
+        _write($self->{clk}, 1);
+        _gpio_fsel($self->{dio}, &Device::BCM2835::BCM2835_GPIO_FSEL_OUTP);
+    }
+    return $temp;
+}
 
+sub get_buttons {
+    my ($self) = @_;
+    my $keys = 0;
+    _write($self->{stb}, 0);
+    $self->send_byte(0x42);
+    for my $i (0..3) {
+        $keys |= $self->receive() << $i;
+    }
+    _write($self->{stb}, 1);
+    return $keys;
+}
 
+sub rotate_bits {
+    my ($self, $num) = @_;
+    for my $i (0..4) {
+        $num = $self->rotr($num, 8);
+    }
+    return $num;
+}
 
-
+sub rotr {
+    my ($self, $num, $bits) = @_;
+    $num &= (2**$bits-1);
+    my $bit = $num & 1;
+    $num >>= 1;
+    if ($bit) {
+        $num |= (1 << ($bits-1));
+    }
+    return $num
+}
 
 sub stb_low {
     my($self) = @_;
@@ -248,18 +325,7 @@ sub stb_high {
     _write($self->{stb}, 1);
 }
 
-
-
-
-sub function1 {
-}
-
-=head2 function2
-
-=cut
-
-sub function2 {
-}
+1;
 
 =head1 AUTHOR
 
